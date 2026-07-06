@@ -1,6 +1,24 @@
 require('dotenv').config();
 const dns = require('dns');
 dns.setDefaultResultOrder('ipv4first');
+
+// 🔧 FIX: Railway IPv6 ENETUNREACH workaround. 
+// Memaksa seluruh resolusi DNS di Node.js menggunakan IPv4.
+const originalLookup = dns.lookup;
+dns.lookup = function lookup(hostname, options, callback) {
+    if (typeof options === 'function') {
+        callback = options;
+        options = { family: 4 };
+    } else if (typeof options === 'number') {
+        options = { family: 4 };
+    } else if (options && typeof options === 'object') {
+        options = { ...options, family: 4 };
+    } else {
+        options = { family: 4 };
+    }
+    return originalLookup(hostname, options, callback);
+};
+
 const express = require('express');
 const cors = require('cors');
 const morgan = require('morgan');
