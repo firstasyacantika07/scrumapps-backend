@@ -44,7 +44,7 @@ router.post('/', authorize(['superadmin', 'admin', 'projectowner']), checkProjec
 
 // 📊 Statistik Grafik Scrum Dashboard (Sesuai dengan axios frontend)
 router.get('/workspace/scrum/stats', 
-    authorize(['superadmin', 'admin', 'projectowner', 'businessanalyst', 'teamdeveloper']), 
+    authorize(['superadmin', 'admin', 'projectowner', 'businessanalyst', 'teamdeveloper', 'developer']), 
     projectController.getWorkspaceScrumStats
 );
 
@@ -56,12 +56,12 @@ router.get('/stats', projectController.getProjectStats);
    🌟 GITHUB INTEGRATION STATIS (GLOBAL)
    ===================================================== */
 router.get('/github/oauth-url', 
-    authorize(['superadmin', 'admin', 'businessanalyst', 'teamdeveloper']), 
+    authorize(['superadmin', 'admin', 'businessanalyst', 'teamdeveloper', 'developer']), 
     githubController.getGitHubOAuthUrl
 );
 
 router.get('/github/requests', 
-    authorize(['superadmin', 'admin', 'businessanalyst', 'teamdeveloper']), 
+    authorize(['superadmin', 'admin', 'businessanalyst', 'teamdeveloper', 'developer']), 
     githubController.getAllIntegrationRequests
 );
 
@@ -81,7 +81,7 @@ router.delete('/github/integrations/:id',
 );
 
 router.post('/github/connect-personal', 
-    authorize(['superadmin', 'admin', 'businessanalyst', 'teamdeveloper']), 
+    authorize(['superadmin', 'admin', 'businessanalyst', 'teamdeveloper', 'developer']), 
     githubController.connectPersonalAccount
 );
 
@@ -107,7 +107,7 @@ router.delete('/:projectId/members/:memberId', authorize(['superadmin', 'admin']
    📋 BACKLOG ROUTES
    ===================================================== */
 router.get('/:projectId/backlogs', backlogController.getBacklogsByProject);
-router.get('/:projectId/backlogs/export-pdf', authorize(['superadmin', 'admin', 'projectowner', 'businessanalyst', 'teamdeveloper']), backlogController.exportBacklogToPDF);
+router.get('/:projectId/backlogs/export-pdf', authorize(['superadmin', 'admin', 'projectowner', 'businessanalyst', 'teamdeveloper', 'developer']), backlogController.exportBacklogToPDF);
 router.post('/:projectId/backlogs', authorize(['superadmin', 'admin', 'projectowner', 'businessanalyst']), backlogController.createBacklog);
 router.put('/:projectId/backlogs/:id', authorize(['superadmin', 'admin', 'projectowner', 'businessanalyst']), backlogController.updateBacklog); 
 router.delete('/:projectId/backlogs/:id', authorize(['superadmin', 'admin', 'projectowner', 'businessanalyst']), backlogController.deleteBacklog); 
@@ -126,9 +126,9 @@ router.delete('/:projectId/sprints/:id', authorize(['superadmin', 'admin', 'proj
    🗂️ DEVELOPMENT / TASK ROUTES (KANBAN)
    ===================================================== */
 router.get('/:projectId/developments', projectController.getProjectDevelopments);
-router.post('/:projectId/developments', authorize(['superadmin', 'admin', 'projectowner', 'businessanalyst', 'teamdeveloper']), projectController.createDevelopment);
-router.put('/:projectId/developments/:devId', authorize(['superadmin', 'admin', 'projectowner', 'businessanalyst', 'teamdeveloper']), projectController.updateDevelopmentStatus);
-router.delete('/:projectId/developments/:devId', authorize(['superadmin', 'admin', 'projectowner', 'businessanalyst', 'teamdeveloper']), projectController.deleteDevelopment);
+router.post('/:projectId/developments', authorize(['superadmin', 'admin', 'projectowner', 'businessanalyst', 'teamdeveloper', 'developer']), projectController.createDevelopment);
+router.put('/:projectId/developments/:devId', authorize(['superadmin', 'admin', 'projectowner', 'businessanalyst', 'teamdeveloper', 'developer']), projectController.updateDevelopmentStatus);
+router.delete('/:projectId/developments/:devId', authorize(['superadmin', 'admin', 'projectowner', 'businessanalyst', 'teamdeveloper', 'developer']), projectController.deleteDevelopment);
 
 
 /* =====================================================
@@ -151,10 +151,10 @@ router.get('/:projectId/logs', projectController.getProjectLogs);
 /* =====================================================
    🐙 GITHUB INTEGRATION DINAMIS (BERBASIS PROJECT ID)
    ===================================================== */
-router.get('/:projectId/github-status', authorize(['superadmin', 'admin', 'projectowner', 'businessanalyst', 'teamdeveloper']), githubController.getIntegrationByProject);
-router.get('/:projectId/github-activity', authorize(['superadmin', 'admin', 'projectowner', 'businessanalyst', 'teamdeveloper']), githubController.getRepoActivity);
+router.get('/:projectId/github-status', authorize(['superadmin', 'admin', 'projectowner', 'businessanalyst', 'teamdeveloper', 'developer']), githubController.getIntegrationByProject);
+router.get('/:projectId/github-activity', authorize(['superadmin', 'admin', 'projectowner', 'businessanalyst', 'teamdeveloper', 'developer']), githubController.getRepoActivity);
 router.post('/:projectId/github-requests', authorize(['superadmin', 'admin', 'businessanalyst']), githubController.createIntegrationRequest);
-router.post('/:projectId/github-sync-backlog', authorize(['superadmin', 'admin', 'businessanalyst', 'teamdeveloper']), githubController.syncBacklogWithGitHub);
+router.post('/:projectId/github-sync-backlog', authorize(['superadmin', 'admin', 'businessanalyst', 'teamdeveloper', 'developer']), githubController.syncBacklogWithGitHub);
 router.post('/:projectId/github-webhooks', authorize(['superadmin', 'admin', 'businessanalyst']), githubController.configureWebhook);
 router.post('/:projectId/github-pat', authorize(['superadmin', 'admin']), githubController.managePAT);
 

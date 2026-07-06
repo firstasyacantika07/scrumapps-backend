@@ -77,7 +77,7 @@ const notifyProjectMembers = async (projectId, projectName, status) => {
 exports.createProject = async (req, res) => {
     const userId = req.user.id;
     const userRole = req.user.role ? String(req.user.role).toLowerCase() : '';
-    const tenantId = req.user.tenant_id || req.headers['x-tenant-id'];
+    let tenantId = req.user.tenant_id || req.headers['x-tenant-id'];
 
     if (!tenantId || tenantId == 0) {
         return res.status(400).json({ success: false, message: "Bad Request: Organisasi / Tenant ID tidak teridentifikasi." });
@@ -183,14 +183,27 @@ exports.getProjects = async (req, res) => {
     try {
         const userId = req.user.id;
         const userRole = req.user.role ? String(req.user.role).toLowerCase() : '';
-        const tenantId = req.user.tenant_id || req.headers['x-tenant-id'];
+        let tenantId = req.user.tenant_id || req.headers['x-tenant-id'];
+
+        // 🔥 FIX DEFENSIVE FOR INVITED USER / TIDB REPLICATION LAG
+        if (!tenantId || tenantId == 0) {
+            const [fallbackWorkspace] = await db.query(
+                `SELECT tenant_id FROM tbr_tenant_users WHERE user_id = ? LIMIT 1`,
+                [userId]
+            );
+
+            if (fallbackWorkspace.length > 0) {
+                tenantId = fallbackWorkspace[0].tenant_id;
+            } else {
+                return res.json([]);
+            }
+        }
 
         let sql;
         let params;
 
         if (userRole === 'superadmin' || userRole === 'admin') {
-            // Superadmin: lihat semua project di tenant manapun.
-            // Admin: lihat semua project di tenant/workspace-nya sendiri (bukan hanya yang dia buat/jadi member).
+            // Superadmin & Admin: Tidak pakai GROUP BY, p.* aman dipasangkan langsung dengan tnt.package_type
             sql = `
                 SELECT p.*, tnt.package_type as package_type 
                 FROM tbr_projects p 
@@ -200,8 +213,9 @@ exports.getProjects = async (req, res) => {
             `;
             params = [tenantId];
         } else {
+            // 🔥 FIX ONLY_FULL_GROUP_BY: Menggunakan ANY_VALUE() pada kolom non-aggregated diluar GROUP BY p.id
             sql = `
-                SELECT p.*, tnt.package_type as package_type 
+                SELECT p.*, ANY_VALUE(tnt.package_type) as package_type 
                 FROM tbr_projects p 
                 INNER JOIN tbr_tenants tnt ON p.tenant_id = tnt.id
                 LEFT JOIN tbr_project_members pm ON p.id = pm.project_id 
@@ -215,6 +229,7 @@ exports.getProjects = async (req, res) => {
         const [rows] = await db.query(sql, params);
         return res.json(rows);
     } catch (err) {
+        console.error("❌ GET PROJECTS ERROR:", err);
         return res.status(500).json({ success: false, error: err.message });
     }
 };
@@ -224,7 +239,12 @@ exports.getProjectById = async (req, res) => {
         const projectId = req.params.id;
         const userId = req.user.id;
         const userRole = req.user.role ? String(req.user.role).toLowerCase() : '';
-        const tenantId = req.user.tenant_id || req.headers['x-tenant-id'];
+        let tenantId = req.user.tenant_id || req.headers['x-tenant-id'];
+
+        if (!tenantId || tenantId == 0) {
+            const [fallback] = await db.query(`SELECT tenant_id FROM tbr_tenant_users WHERE user_id = ? LIMIT 1`, [userId]);
+            if (fallback.length > 0) tenantId = fallback[0].tenant_id;
+        }
 
         let sql;
         let params;
@@ -238,8 +258,9 @@ exports.getProjectById = async (req, res) => {
             `;
             params = [projectId, tenantId];
         } else {
+            // 🔥 FIX ONLY_FULL_GROUP_BY pada detail project jika terpanggil rute non-admin
             sql = `
-                SELECT p.*, tnt.package_type as package_type 
+                SELECT p.*, ANY_VALUE(tnt.package_type) as package_type 
                 FROM tbr_projects p 
                 INNER JOIN tbr_tenants tnt ON p.tenant_id = tnt.id
                 LEFT JOIN tbr_project_members pm ON p.id = pm.project_id 
@@ -269,19 +290,18 @@ exports.updateProject = async (req, res) => {
         const projectId = req.params.id;
         const userId = req.user.id;
         const userRole = req.user.role ? String(req.user.role).toLowerCase() : '';
-        const tenantId = req.user.tenant_id || req.headers['x-tenant-id'];
+        let tenantId = req.user.tenant_id || req.headers['x-tenant-id'];
         const { name, start_date, end_date, status, repo_url } = req.body;
 
         if (userRole === 'superadmin') {
             return res.status(403).json({ success: false, message: "Akses Ditolak: Superadmin hanya diizinkan memantau data secara Read-Only." });
         }
 
-        // 🔧 FIX (notifikasi status duplikat): ambil status LAMA sebelum di-update,
-        // supaya bisa dibandingkan dengan status baru. Sebelumnya notifyProjectMembers()
-        // selalu dipanggil di setiap updateProject, jadi kalau user cuma edit nama/
-        // tanggal/repo_url pada proyek yang statusnya sudah "done"/"late", notifikasi
-        // "Status proyek: SELESAI/TERLAMBAT" ikut terkirim ulang setiap kali -- padahal
-        // statusnya tidak berubah sama sekali.
+        if (!tenantId || tenantId == 0) {
+            const [fallback] = await db.query(`SELECT tenant_id FROM tbr_tenant_users WHERE user_id = ? LIMIT 1`, [userId]);
+            if (fallback.length > 0) tenantId = fallback[0].tenant_id;
+        }
+
         const [projectCheck] = await db.query(`SELECT id, status FROM tbr_projects WHERE id = ? AND tenant_id = ?`, [projectId, tenantId]);
         if (projectCheck.length === 0) {
             return res.status(403).json({ success: false, message: "Akses Ditolak: Data tidak valid." });
@@ -295,7 +315,6 @@ exports.updateProject = async (req, res) => {
         `;
         await db.query(sql, [name, start_date, end_date, status, repo_url || null, projectId, tenantId]);
 
-        // Kirim notifikasi HANYA kalau status benar-benar berubah dari sebelumnya.
         const statusChanged = String(previousStatus).toLowerCase() !== String(status).toLowerCase();
         if (statusChanged) {
             await notifyProjectMembers(projectId, name, status);
@@ -313,10 +332,15 @@ exports.deleteProject = async (req, res) => {
         const projectId = req.params.id;
         const userId = req.user.id;
         const userRole = req.user.role ? String(req.user.role).toLowerCase() : '';
-        const tenantId = req.user.tenant_id || req.headers['x-tenant-id'];
+        let tenantId = req.user.tenant_id || req.headers['x-tenant-id'];
 
         if (userRole !== 'admin') {
             return res.status(403).json({ success: false, message: "Hanya Admin Workspace (Pemilik Organisasi) yang dapat menghapus proyek ini secara permanen." });
+        }
+
+        if (!tenantId || tenantId == 0) {
+            const [fallback] = await db.query(`SELECT tenant_id FROM tbr_tenant_users WHERE user_id = ? LIMIT 1`, [userId]);
+            if (fallback.length > 0) tenantId = fallback[0].tenant_id;
         }
 
         const [projectInfo] = await db.query(`SELECT name FROM tbr_projects WHERE id = ? AND tenant_id = ?`, [projectId, tenantId]);
@@ -324,17 +348,6 @@ exports.deleteProject = async (req, res) => {
             return res.status(404).json({ success: false, message: "Proyek tidak ditemukan." });
         }
 
-        // 🔧 FIX: Query notifikasi DIPISAH dalam try/catch sendiri.
-        // Sebelumnya query ini satu try/catch besar dengan proses hapus project --
-        // kalau query ini gagal (mis. kolom salah/tabel beda), seluruh permintaan
-        // hapus project ikut gagal (500) padahal harusnya notifikasi gagal TIDAK
-        // boleh menghalangi project tetap terhapus.
-        //
-        // 🔧 FIX: Matching role_in_project dibuat case-insensitive & trim
-        // (LOWER(TRIM(...))) -- kalau di database tersimpan varian seperti
-        // "projectowner", "Project Owner", atau ada spasi tak sengaja, query lama
-        // akan gagal MENEMUKAN owner yang seharusnya, sehingga owner asli tidak
-        // dapat notifikasi.
         let owners = [];
         try {
             [owners] = await db.query(`
@@ -344,15 +357,10 @@ exports.deleteProject = async (req, res) => {
                 WHERE pm.project_id = ? AND LOWER(TRIM(pm.role_in_project)) = 'projectowner'
             `, [projectId]);
 
-            // 🔧 FIX: log eksplisit siapa yang terdeteksi sebagai ProjectOwner untuk
-            // project ini, supaya kalau ada laporan "email salah kirim ke X" bisa
-            // langsung dicek dari log apakah X memang tercatat sebagai ProjectOwner
-            // di tbr_project_members, atau ada bug lain.
             console.log(`[DELETE PROJECT] Project #${projectId} ("${projectInfo[0].name}") -> ProjectOwner terdeteksi:`,
                 owners.map(o => `${o.name} <${o.email}>`));
         } catch (notifQueryErr) {
             console.error(`[DELETE PROJECT] Gagal mengambil daftar ProjectOwner untuk notifikasi (project #${projectId}):`, notifQueryErr.message);
-            // owners tetap [] -- proses hapus project TETAP lanjut di bawah.
         }
 
         for (const owner of owners) {
@@ -366,7 +374,6 @@ exports.deleteProject = async (req, res) => {
             }
         }
 
-        // Hapus data secara permanen
         await db.query(`DELETE FROM tbr_projects WHERE id=? AND tenant_id=?`, [projectId, tenantId]);
         await createLog(userId, projectId, `Menghapus proyek "${projectInfo[0].name}" secara permanen`);
 
@@ -907,17 +914,16 @@ exports.getWorkspaceScrumStats = async (req, res) => {
 
         const [statusRows] = await db.query(`
             SELECT 
-                COUNT(b.id) as total_backlogs,
-                IFNULL(SUM(CASE WHEN b.status IN ('hold', 'inactive') THEN 1 ELSE 0 END), 0) as hold,
-                IFNULL(SUM(CASE WHEN b.status IN ('progress', 'active') THEN 1 ELSE 0 END), 0) as progress,
-                IFNULL(SUM(CASE WHEN b.status = 'done' THEN 1 ELSE 0 END), 0) as done,
-                IFNULL(SUM(CASE WHEN b.status IN ('late', 'overdue') THEN 1 ELSE 0 END), 0) as late
-            FROM tbr_projects p
-            INNER JOIN tbr_backlogs b ON p.id = b.project_id
-            WHERE p.tenant_id = ?
-        `, [tenantId]);
+                (SELECT COUNT(*) FROM tbr_backlogs b INNER JOIN tbr_projects p2 ON b.project_id = p2.id WHERE p2.tenant_id = ?) as total_backlogs,
+                IFNULL(SUM(CASE WHEN status IN ('planned', 'hold') THEN 1 ELSE 0 END), 0) as hold,
+                IFNULL(SUM(CASE WHEN status IN ('on_progress', 'active') THEN 1 ELSE 0 END), 0) as progress,
+                IFNULL(SUM(CASE WHEN status IN ('completed', 'done') THEN 1 ELSE 0 END), 0) as done,
+                IFNULL(SUM(CASE WHEN status NOT IN ('completed', 'done') AND end_date < NOW() THEN 1 ELSE 0 END), 0) as late
+            FROM tbr_projects 
+            WHERE tenant_id = ?
+        `, [tenantId, tenantId]);
 
-        // Jika tidak ada backlog, pastikan nilai default-nya nol agar chart tidak rusak
+        // Jika tidak ada data, pastikan nilai default-nya nol agar chart tidak rusak
         const stats = statusRows[0] || { total_backlogs: 0, hold: 0, progress: 0, done: 0, late: 0 };
 
         const [sprintRows] = await db.query(`

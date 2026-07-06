@@ -472,7 +472,8 @@ const approveIntegrationRequest = async (req, res, next) => {
             oauth_url: oauthUrl 
         });
     } catch (error) {
-        return res.status(500).json({ success: false, message: 'Internal Server Error' });
+        console.error('🔥 approveIntegrationRequest ERROR:', error);
+        return res.status(500).json({ success: false, message: 'Internal Server Error', error: error.message });
     }
 };
 
@@ -667,7 +668,7 @@ const configureWebhook = async (req, res, next) => {
                     name: 'web',
                     active: true,
                     events: ['push', 'pull_request'],
-                    config: { url: webhookUrl, content_type: 'json', inbound_auth: 'none' }
+                    config: { url: webhookUrl, content_type: 'json' }
                 },
                 { 
                     headers: { 
@@ -679,9 +680,15 @@ const configureWebhook = async (req, res, next) => {
             );
             return res.status(200).json({ success: true, message: 'GitHub Webhook dikonfigurasi otomatis!', data: githubResponse.data });
         } catch (githubError) {
-            if (githubError.response?.data?.message?.includes('already exists')) {
+            const errorData = githubError.response?.data;
+            const isAlreadyExists = 
+                errorData?.message?.includes('already exists') || 
+                (errorData?.errors && errorData.errors.some(e => e.message?.includes('already exists')));
+
+            if (isAlreadyExists) {
                 return res.status(409).json({ success: false, message: 'Webhook sudah terdaftar.' });
             }
+            console.error("GitHub Webhook Error:", errorData || githubError.message);
             return res.status(400).json({ success: false, message: 'Gagal mendaftarkan webhook otomatis.' });
         }
     } catch (error) {

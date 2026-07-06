@@ -457,17 +457,13 @@ exports.startTrial = async (req, res) => {
       });
     }
 
-    // 1. Cek kuota pemakaian trial user
-    const [users] = await db.query(
-      `SELECT trial_used FROM tbr_users WHERE id = ?`,
+    // 1. Cek kuota pemakaian trial user melalui tbr_subscriptions
+    const [trialCheck] = await db.query(
+      `SELECT id FROM tbr_subscriptions WHERE user_id = ? AND billing_cycle = 'TRIAL'`,
       [req.user.id]
     );
 
-    if (!users || users.length === 0) {
-      return res.status(404).json({ success: false, message: "User tidak ditemukan" });
-    }
-
-    if (users[0].trial_used === 1 || users[0].trial_used === true) {
+    if (trialCheck && trialCheck.length > 0) {
       return res.status(400).json({
         success: false,
         message: "Anda sudah pernah mengambil masa uji coba PRO Trial sebelumnya.",
@@ -487,18 +483,18 @@ exports.startTrial = async (req, res) => {
     try {
       // 2. Tandai status sub lama sebagai EXPIRED di tabel tbr_subscriptions jika ada
       await db.query(
-        `UPDATE tbr_subscriptions SET status = 'EXPIRED' WHERE tenant_id = ?`,
-        [tenantId]
+        `UPDATE tbr_subscriptions SET status = 'EXPIRED' WHERE user_id = ?`,
+        [req.user.id]
       );
 
       // 3. Catat transaksi log trial baru ke tbr_subscriptions
       await db.query(
         `
         INSERT INTO tbr_subscriptions
-          (tenant_id, user_id, package_type, billing_cycle, start_date, end_date, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+          (user_id, package_type, billing_cycle, start_date, end_date, status)
+        VALUES (?, ?, ?, ?, ?, ?)
         `,
-        [tenantId, req.user.id, "PRO", "TRIAL", mysqlNowString, mysqlEndString, "ACTIVE"]
+        [req.user.id, "PRO", "TRIAL", mysqlNowString, mysqlEndString, "ACTIVE"]
       );
 
       // 4. 🔴 SUMBER KEBENARAN UTAMA: UPDATE tbr_tenants (bukan tbr_users)
@@ -519,23 +515,19 @@ exports.startTrial = async (req, res) => {
         [mysqlNowString, mysqlEndString, mysqlEndString, tenantId]
       );
 
-      // 5. UPDATE tbr_users -- flag trial_used tetap per-user
+      // 5. UPDATE tbr_users
       await db.query(
         `
         UPDATE tbr_users
         SET 
-          trial_used = 1,
           is_trial = 1,
           package_type = 'PRO',
           subscription_status = 'trialing',
-          trial_start = ?,
-          trial_end = ?,
-          trial_ends_at = ?,
           subscription_ends_at = ?,
           updated_at = NOW()
         WHERE id = ?
         `,
-        [mysqlNowString, mysqlEndString, mysqlEndString, mysqlEndString, req.user.id]
+        [mysqlEndString, req.user.id]
       );
 
       await db.query("COMMIT");
@@ -617,17 +609,17 @@ exports.activatePlan = async (req, res) => {
          ========================================================================= */
       try {
         await db.query(
-          `UPDATE tbr_subscriptions SET status = 'EXPIRED' WHERE tenant_id = ?`,
-          [tenantId]
+          `UPDATE tbr_subscriptions SET status = 'EXPIRED' WHERE user_id = ?`,
+          [req.user.id]
         );
 
         await db.query(
           `
           INSERT INTO tbr_subscriptions 
-            (tenant_id, user_id, package_type, billing_cycle, start_date, end_date, status)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
+            (user_id, package_type, billing_cycle, start_date, end_date, status)
+          VALUES (?, ?, ?, ?, ?, ?)
           `,
-          [tenantId, req.user.id, package_type.toUpperCase(), billing_cycle.toUpperCase(), mysqlStart, mysqlEnd, "ACTIVE"]
+          [req.user.id, package_type.toUpperCase(), billing_cycle.toUpperCase(), mysqlStart, mysqlEnd, "ACTIVE"]
         );
       } catch (logErr) {
         console.warn("⚠️ Skip log tbr_subscriptions:", logErr.message);

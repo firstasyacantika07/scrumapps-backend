@@ -29,8 +29,10 @@ router.get('/dashboard/stats', verifyToken, requireSuperadmin, async (req, res) 
     const [revenueQuery] = await db.query(`
       SELECT IFNULL(SUM(
         CASE 
-          WHEN package_type = 'PRO' THEN 499000
-          WHEN package_type = 'ENTERPRISE' THEN 3500000
+          WHEN package_type = 'PRO' AND billing_cycle = 'MONTHLY' THEN 150000
+          WHEN package_type = 'PRO' AND billing_cycle = 'YEARLY' THEN 1500000
+          WHEN package_type = 'ENTERPRISE' AND billing_cycle = 'MONTHLY' THEN 299000
+          WHEN package_type = 'ENTERPRISE' AND billing_cycle = 'YEARLY' THEN 2999000
           ELSE 0 
         END
       ), 0) AS total_revenue 
@@ -159,10 +161,12 @@ router.get('/billing/invoices', verifyToken, requireSuperadmin, async (req, res)
         DATE_FORMAT(updated_at, '%Y-%m-%d %H:%i:%s') AS paid_at,
         /* Membuat nomor invoice generator otomatis berbasis tanggal join dan ID */
         CONCAT('INV/', DATE_FORMAT(created_at, '%Y%m'), '/', LPAD(id, 4, '0')) AS invoice_number,
-        /* Memetakan nominal harga bayangan berdasarkan package_type */
+        /* Memetakan nominal harga bayangan berdasarkan package_type dan billing_cycle */
         CASE 
-          WHEN package_type = 'PRO' THEN 499000
-          WHEN package_type = 'ENTERPRISE' THEN 3500000
+          WHEN package_type = 'PRO' AND billing_cycle = 'MONTHLY' THEN 150000
+          WHEN package_type = 'PRO' AND billing_cycle = 'YEARLY' THEN 1500000
+          WHEN package_type = 'ENTERPRISE' AND billing_cycle = 'MONTHLY' THEN 299000
+          WHEN package_type = 'ENTERPRISE' AND billing_cycle = 'YEARLY' THEN 2999000
           ELSE 0 
         END AS amount
       FROM tbr_tenants

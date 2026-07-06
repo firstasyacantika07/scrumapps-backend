@@ -14,9 +14,8 @@ const safeIsoDate = (dateString) => {
         return dateString.toISOString().split('T')[0];
     }
     if (typeof dateString === 'string') {
-        const trimmed = dateString.trim();
-        if (!trimmed || trimmed.startsWith('0000')) return null;
-        const parsedDate = new Date(trimmed);
+        if (!dateString.trim() || dateString.trim().startsWith('0000')) return null;
+        const parsedDate = new Date(dateString.trim());
         return isNaN(parsedDate.getTime()) ? null : parsedDate.toISOString().split('T')[0];
     }
     return null;
@@ -32,7 +31,7 @@ exports.login = async (req, res) => {
         // Normalisasi email
         email = email ? email.trim().toLowerCase() : email;
 
-        // 1. Ambil data profile dasar
+        // 1. Ambil data profile dasar dari Master User
         const [rows] = await db.query(
             `SELECT id, name, email, password, role, tenant_id FROM tbr_users WHERE email = ? LIMIT 1`,
             [email]
@@ -64,13 +63,37 @@ exports.login = async (req, res) => {
         }
 
         // 4. Ambil daftar workspace dari tabel pivot
-        const [workspaces] = await db.query(`
-      SELECT 
-        tu.tenant_id, tu.role, t.company_name, t.subdomain, t.package_type, t.billing_cycle, t.status as tenant_status, t.trial_end, t.subscription_ends_at
-      FROM tbr_tenant_users tu
-      JOIN tbr_tenants t ON tu.tenant_id = t.id
-      WHERE tu.user_id = ?
-    `, [user.id]);
+        let [workspaces] = await db.query(`
+            SELECT 
+              tu.tenant_id, tu.role, t.company_name, t.subdomain, t.package_type, t.billing_cycle, t.status as tenant_status, t.trial_end, t.subscription_ends_at
+            FROM tbr_tenant_users tu
+            JOIN tbr_tenants t ON tu.tenant_id = t.id
+            WHERE tu.user_id = ?
+        `, [user.id]);
+
+        // 🔥 OPTIMASI PERTAHANAN UNTUK TIDB CLOUD (DEFENSIF UNTUK ACC USER YANG DI-INVITE)
+        // Jika workspaces kosong karena delay replikasi relasi, namun user memiliki tenant_id utama
+        if (workspaces.length === 0 && user.tenant_id) {
+            // Ambil data tenant langsung dari tbr_tenants berdasar tenant_id user
+            const [fallbackTenant] = await db.query(
+                `SELECT id as tenant_id, company_name, subdomain, package_type, billing_cycle, status as tenant_status, trial_end, subscription_ends_at FROM tbr_tenants WHERE id = ? LIMIT 1`,
+                [user.tenant_id]
+            );
+
+            if (fallbackTenant.length > 0) {
+                // Masukkan data relasi darurat ke database tbr_tenant_users agar sinkron ke depannya
+                await db.query(
+                    `INSERT IGNORE INTO tbr_tenant_users (user_id, tenant_id, role) VALUES (?, ?, ?)`,
+                    [user.id, user.tenant_id, user.role || 'member']
+                );
+
+                // Masukkan ke array workspaces lokal agar login berhasil instan
+                workspaces.push({
+                    ...fallbackTenant[0],
+                    role: user.role || 'member'
+                });
+            }
+        }
 
         // Update status kedaluwarsa untuk semua workspace
         for (let ws of workspaces) {
@@ -100,6 +123,11 @@ exports.login = async (req, res) => {
         delete user.password;
 
         const defaultWorkspace = workspaces.length > 0 ? workspaces[0] : null;
+        let returnRole = defaultWorkspace ? defaultWorkspace.role : user.role;
+        const normalizedRole = returnRole ? String(returnRole).toLowerCase().replace(/[\s_]+/g, '') : '';
+        if (normalizedRole.startsWith('businessanaly') || normalizedRole === 'analyst') {
+            returnRole = 'BusinessAnalyst';
+        }
 
         return res.status(200).json({
             success: true,
@@ -109,9 +137,8 @@ exports.login = async (req, res) => {
                 name: user.name,
                 email: user.email,
                 workspaces: workspaces,
-                // Backward compatibility
                 tenant_id: defaultWorkspace ? defaultWorkspace.tenant_id : user.tenant_id,
-                role: defaultWorkspace ? defaultWorkspace.role : user.role,
+                role: returnRole,
                 subscription_status: defaultWorkspace ? defaultWorkspace.tenant_status : 'active'
             },
         });
@@ -138,13 +165,28 @@ exports.getMe = async (req, res) => {
         }
 
         // Ambil semua workspaces
-        const [workspaces] = await db.query(`
-      SELECT 
-        tu.tenant_id, tu.role, t.company_name, t.subdomain, t.package_type, t.billing_cycle, t.status as tenant_status, t.trial_end, t.subscription_ends_at
-      FROM tbr_tenant_users tu
-      JOIN tbr_tenants t ON tu.tenant_id = t.id
-      WHERE tu.user_id = ?
-    `, [req.user.id]);
+        let [workspaces] = await db.query(`
+            SELECT 
+              tu.tenant_id, tu.role, t.company_name, t.subdomain, t.package_type, t.billing_cycle, t.status as tenant_status, t.trial_end, t.subscription_ends_at
+            FROM tbr_tenant_users tu
+            JOIN tbr_tenants t ON tu.tenant_id = t.id
+            WHERE tu.user_id = ?
+        `, [req.user.id]);
+
+        // 🔥 OPTIMASI GET ME UNTUK AKUN HASIL UNDANGAN DI TIDB CLOUD
+        if (workspaces.length === 0 && req.user.tenant_id) {
+            const [fallbackTenant] = await db.query(
+                `SELECT id as tenant_id, company_name, subdomain, package_type, billing_cycle, status as tenant_status, trial_end, subscription_ends_at FROM tbr_tenants WHERE id = ? LIMIT 1`,
+                [req.user.tenant_id]
+            );
+
+            if (fallbackTenant.length > 0) {
+                workspaces.push({
+                    ...fallbackTenant[0],
+                    role: req.user.role || 'member'
+                });
+            }
+        }
 
         for (let ws of workspaces) {
             let finalStatus = ws.tenant_status || "active";
@@ -165,6 +207,12 @@ exports.getMe = async (req, res) => {
 
         const formattedEndDate = req.user.billing_cycle === "TRIAL" ? req.user.trial_end : req.user.subscription_ends_at;
 
+        let returnRole = req.user.role;
+        const normalizedRole = returnRole ? String(returnRole).toLowerCase().replace(/[\s_]+/g, '') : '';
+        if (normalizedRole.startsWith('businessanaly') || normalizedRole === 'analyst') {
+            returnRole = 'BusinessAnalyst';
+        }
+
         return res.status(200).json({
             success: true,
             user: {
@@ -173,7 +221,7 @@ exports.getMe = async (req, res) => {
                 email: req.user.email,
                 workspaces: workspaces,
                 tenant_id: req.user.tenant_id,
-                role: req.user.role,
+                role: returnRole,
                 package_type: req.user.package_type || "FREE",
                 billing_cycle: req.user.billing_cycle || "NONE",
                 subscription_status: req.user.subscription_status || "active",
@@ -222,7 +270,7 @@ exports.register = async (req, res) => {
 
         const [existing] = await connection.query(
             `SELECT id FROM tbr_users WHERE email = ? LIMIT 1`,
-            [email]
+            [email ? email.trim().toLowerCase() : ""]
         );
 
         if (existing.length > 0) {
@@ -251,8 +299,8 @@ exports.register = async (req, res) => {
 
         const [tenantResult] = await connection.query(
             `INSERT INTO tbr_tenants
-        (company_name, package_type, billing_cycle, status, trial_start, trial_end, subdomain)
-       VALUES (?, 'FREE', 'TRIAL', 'active', ?, ?, ?)`,
+            (company_name, package_type, billing_cycle, status, trial_start, trial_end, subdomain)
+           VALUES (?, 'FREE', 'TRIAL', 'active', ?, ?, ?)`,
             [
                 company_name.trim(),
                 trialStart.toISOString().slice(0, 19).replace("T", " "),
@@ -266,7 +314,7 @@ exports.register = async (req, res) => {
 
         const [userResult] = await connection.query(
             `INSERT INTO tbr_users (name, email, password, role, tenant_id, phone_number)
-       VALUES (?, ?, ?, 'admin', ?, ?)`,
+           VALUES (?, ?, ?, 'admin', ?, ?)`,
             [name, email.trim().toLowerCase(), hashedPassword, tenantId, phone_number || null]
         );
         const newUserId = userResult.insertId;
@@ -373,19 +421,19 @@ exports.forgotPassword = async (req, res) => {
         const resetUrl = `${process.env.FRONTEND_URL || "http://localhost:5173"}/reset-password?token=${rawToken}&email=${encodeURIComponent(email)}`;
 
         const emailHtml = `
-      <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto;">
-        <h2>Atur Ulang Kata Sandi</h2>
-        <p>Halo ${user.name || ""},</p>
-        <p>Kami menerima permintaan untuk mengatur ulang kata sandi akun ScrumApps Anda. Klik tombol di bawah untuk melanjutkan:</p>
-        <p style="text-align: center; margin: 32px 0;">
-          <a href="${resetUrl}" style="background:#D31217;color:#fff;padding:14px 28px;border-radius:8px;text-decoration:none;font-weight:bold;">
-            Atur Ulang Kata Sandi
-          </a>
-        </p>
-        <p>Atau salin tautan ini ke browser Anda:<br>${resetUrl}</p>
-        <p style="color:#888;font-size:13px;">Tautan ini berlaku selama 1 jam. Jika Anda tidak meminta ini, abaikan email ini.</p>
-      </div>
-    `;
+          <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto;">
+            <h2>Atur Ulang Kata Sandi</h2>
+            <p>Halo ${user.name || ""},</p>
+            <p>Kami menerima permintaan untuk mengatur ulang kata sandi akun ScrumApps Anda. Klik tombol di bawah untuk melanjutkan:</p>
+            <p style="text-align: center; margin: 32px 0;">
+              <a href="${resetUrl}" style="background:#D31217;color:#fff;padding:14px 28px;border-radius:8px;text-decoration:none;font-weight:bold;">
+                Atur Ulang Kata Sandi
+              </a>
+            </p>
+            <p>Atau salin tautan ini ke browser Anda:<br>${resetUrl}</p>
+            <p style="color:#888;font-size:13px;">Tautan ini berlaku selama 1 jam. Jika Anda tidak meminta ini, abaikan email ini.</p>
+          </div>
+        `;
 
         const emailSent = await sendEmail(email, "Atur Ulang Kata Sandi - ScrumApps", emailHtml);
         if (!emailSent) {
@@ -494,12 +542,12 @@ exports.googleAuth = async (req, res) => {
 
         const [rows] = await connection.query(
             `SELECT
-        u.id, u.name, u.email, u.role, u.tenant_id,
-        t.package_type, t.billing_cycle, t.status as tenant_status,
-        t.trial_end, t.subscription_ends_at
-       FROM tbr_users u
-       LEFT JOIN tbr_tenants t ON u.tenant_id = t.id
-       WHERE u.email = ? LIMIT 1`,
+                u.id, u.name, u.email, u.role, u.tenant_id,
+                t.package_type, t.billing_cycle, t.status as tenant_status,
+                t.trial_end, t.subscription_ends_at
+             FROM tbr_users u
+             LEFT JOIN tbr_tenants t ON u.tenant_id = t.id
+             WHERE u.email = ? LIMIT 1`,
             [email]
         );
 
@@ -538,16 +586,35 @@ exports.googleAuth = async (req, res) => {
             );
 
             await connection.commit();
-            user = { id: newUserId, name: name, email: email };
+            user = { id: newUserId, name: name, email: email, tenant_id: tenantId, role: 'admin' };
         }
 
-        const [workspaces] = await connection.query(`
-      SELECT 
-        tu.tenant_id, tu.role, t.company_name, t.subdomain, t.package_type, t.billing_cycle, t.status as tenant_status, t.trial_end, t.subscription_ends_at
-      FROM tbr_tenant_users tu
-      JOIN tbr_tenants t ON tu.tenant_id = t.id
-      WHERE tu.user_id = ?
-    `, [user.id]);
+        let [workspaces] = await connection.query(`
+            SELECT 
+              tu.tenant_id, tu.role, t.company_name, t.subdomain, t.package_type, t.billing_cycle, t.status as tenant_status, t.trial_end, t.subscription_ends_at
+            FROM tbr_tenant_users tu
+            JOIN tbr_tenants t ON tu.tenant_id = t.id
+            WHERE tu.user_id = ?
+        `, [user.id]);
+
+        // 🔥 OPTIMASI DETEKSI COOLDOWN UNTUK GOOGLE AUTH DI TIDB CLOUD
+        if (workspaces.length === 0 && user.tenant_id) {
+            const [fallbackTenant] = await connection.query(
+                `SELECT id as tenant_id, company_name, subdomain, package_type, billing_cycle, status as tenant_status, trial_end, subscription_ends_at FROM tbr_tenants WHERE id = ? LIMIT 1`,
+                [user.tenant_id]
+            );
+
+            if (fallbackTenant.length > 0) {
+                await connection.query(
+                    `INSERT IGNORE INTO tbr_tenant_users (user_id, tenant_id, role) VALUES (?, ?, ?)`,
+                    [user.id, user.tenant_id, user.role || 'member']
+                );
+                workspaces.push({
+                    ...fallbackTenant[0],
+                    role: user.role || 'member'
+                });
+            }
+        }
 
         for (let ws of workspaces) {
             let finalStatus = ws.tenant_status || "active";
@@ -587,8 +654,8 @@ exports.googleAuth = async (req, res) => {
                 name: user.name,
                 email: user.email,
                 workspaces: workspaces,
-                tenant_id: defaultWorkspace ? defaultWorkspace.tenant_id : null,
-                role: defaultWorkspace ? defaultWorkspace.role : null,
+                tenant_id: defaultWorkspace ? defaultWorkspace.tenant_id : user.tenant_id,
+                role: defaultWorkspace ? defaultWorkspace.role : user.role,
                 subscription_status: defaultWorkspace ? defaultWorkspace.tenant_status : 'active'
             },
         });

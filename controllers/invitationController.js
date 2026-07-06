@@ -278,6 +278,13 @@ exports.acceptInvitation = async (req, res) => {
 
     const newUserId = insertResult.insertId;
 
+    // 🔥 FIX UTAMA: Sinkronisasikan user ke tabel pivot tbr_tenant_users
+    // Tanpa ini, middleware auth.js gagal membaca role user di level tenant/workspace
+    await connection.query(
+      `INSERT INTO tbr_tenant_users (user_id, tenant_id, role) VALUES (?, ?, ?)`,
+      [newUserId, invitation.tenant_id, invitation.role]
+    );
+
     // 🔥 SINKRONISASI BARU: Otomatis daftarkan user baru ke project yang ada di tenant ini
     // (Bypass perlindungan agar saat pertama login dashboard tidak kosong melongpong)
     // 🔧 FIX: Kolom di tbr_project_members bernama `role_in_project`, BUKAN `role`.

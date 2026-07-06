@@ -52,6 +52,7 @@ const verifyToken = async (req, res, next) => {
       params = [decoded.id, requestedTenantId];
     } else {
       // Fallback: ambil tenant pertama (atau biarkan tenant_id null jika tidak punya workspace)
+      // Mengubah ORDER BY ke tu.id untuk menghindari error 'Unknown column tu.joined_at'
       sql = `
         SELECT 
           u.id, u.name, u.email,
@@ -61,7 +62,7 @@ const verifyToken = async (req, res, next) => {
         LEFT JOIN tbr_tenant_users tu ON u.id = tu.user_id
         LEFT JOIN tbr_tenants t ON tu.tenant_id = t.id
         WHERE u.id = ?
-        ORDER BY tu.joined_at ASC
+        ORDER BY tu.id ASC
         LIMIT 1
       `;
       params = [decoded.id];
@@ -127,9 +128,15 @@ const verifyToken = async (req, res, next) => {
     }
 
     // 🔥 FIX UTAMA: Normalisasi role diseragamkan menggunakan regex /[\s_]+/g
-    const cleanRole = user.role 
+    let cleanRole = user.role 
         ? String(user.role).replace(/[\s_]+/g, '').toLowerCase().trim() 
         : '';
+        
+    // WORKAROUND: Tangani role 'Business Analyst' yang terpotong menjadi 'BusinessAnaly' di database
+    // ATAU yang disimpan sebagai 'analyst' (agar backward compatible)
+    if (cleanRole.startsWith('businessanaly') || cleanRole === 'analyst') {
+        cleanRole = 'businessanalyst';
+    }
 
     // 6. Menyimpan data user & status billing ke objek request (req.user)
     req.user = {
