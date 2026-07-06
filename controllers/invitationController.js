@@ -17,15 +17,15 @@ if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
 }
 
 const transporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  port: 465,               // Menggunakan port 465 (SSL Murni)
-  secure: true,            // Wajib TRUE untuk port 465
+  host: process.env.SMTP_HOST || 'smtp.gmail.com',
+  port: process.env.SMTP_PORT || 587,
+  secure: process.env.SMTP_PORT == 465,
   auth: {
-    user: 'navacantika93@gmail.com', // Email Anda langsung
-    pass: 'lemarxbjqepezppm' ,
+    user: process.env.SMTP_USER,
+    pass: process.env.SMTP_PASS,
   },
   tls: {
-    rejectUnauthorized: false // Bypass verifikasi sertifikat lokal (sangat aman untuk localhost)
+    rejectUnauthorized: false
   }
 });
 

@@ -28,14 +28,16 @@ const SMTP_PORT = Number(process.env.SMTP_PORT) || 587;
 const isImplicitTLS = SMTP_PORT === 465;
 
 const transporter = nodemailer.createTransport({
-    host: SMTP_HOST,
-    port: SMTP_PORT,
-    secure: isImplicitTLS,
-    requireTLS: !isImplicitTLS,
-    auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASS
-    }
+  host: process.env.SMTP_HOST || 'smtp.gmail.com',
+  port: process.env.SMTP_PORT || 587,
+  secure: process.env.SMTP_PORT == 465,
+  auth: {
+    user: process.env.SMTP_USER,
+    pass: process.env.SMTP_PASS,
+  },
+  tls: {
+    rejectUnauthorized: false
+  }
 });
 
 // Cek koneksi & kredensial SMTP sekali saat server start, supaya masalah
