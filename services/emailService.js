@@ -37,7 +37,11 @@ const transporter = nodemailer.createTransport({
   },
   tls: {
     rejectUnauthorized: false
-  }
+  },
+  family: 4,
+  connectionTimeout: 10000,
+  greetingTimeout: 10000,
+  socketTimeout: 10000
 });
 
 // Cek koneksi & kredensial SMTP sekali saat server start, supaya masalah

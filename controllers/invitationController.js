@@ -26,7 +26,11 @@ const transporter = nodemailer.createTransport({
   },
   tls: {
     rejectUnauthorized: false
-  }
+  },
+  family: 4, // 🔧 FIX: Paksa gunakan IPv4. Jika Railway mencoba IPv6 ke Gmail, koneksi sering hang.
+  connectionTimeout: 10000,
+  greetingTimeout: 10000,
+  socketTimeout: 10000
 });
 
 // ======================================================
