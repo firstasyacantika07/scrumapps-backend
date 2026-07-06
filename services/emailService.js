@@ -39,6 +39,12 @@ const transporter = nodemailer.createTransport({
     rejectUnauthorized: false
   },
   family: 4,
+  lookup: (hostname, options, callback) => {
+    // 🔧 FIX: Bypass Node's Happy Eyeballs & force IPv4 strictly
+    require('dns').lookup(hostname, { family: 4 }, (err, address, family) => {
+      callback(err, address, family);
+    });
+  },
   connectionTimeout: 10000,
   greetingTimeout: 10000,
   socketTimeout: 10000
